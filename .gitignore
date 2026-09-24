@@ -62,4 +62,7 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
 
+# Git worktrees (created under .worktrees/ at the project root)
+.worktrees/
+
 .claude/

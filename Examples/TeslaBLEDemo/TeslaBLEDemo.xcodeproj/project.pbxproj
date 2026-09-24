@@ -101,7 +101,7 @@
 			mainGroup = 29BDFE5F2F8D522400EE8162;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				29BDFE7C2F8D52DC00EE8162 /* XCLocalSwiftPackageReference "../../../swift-tesla-ble" */,
+				29BDFE7C2F8D52DC00EE8162 /* XCLocalSwiftPackageReference "../.." */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 29BDFE692F8D522400EE8162 /* Products */;
@@ -345,9 +345,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		29BDFE7C2F8D52DC00EE8162 /* XCLocalSwiftPackageReference "../../../swift-tesla-ble" */ = {
+		29BDFE7C2F8D52DC00EE8162 /* XCLocalSwiftPackageReference "../.." */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "../../../swift-tesla-ble";
+			relativePath = ../..;
 		};
 /* End XCLocalSwiftPackageReference section */
 

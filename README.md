@@ -23,7 +23,7 @@ Pure-Swift package for talking to Tesla vehicles directly over Bluetooth LE. One
 - iOS 17+ deployment target (primary platform)
 - macOS 13+ (test host only — no CoreBluetooth validation has been done on macOS)
 - Swift 6.2 toolchain
-- Xcode 16 or newer
+- Xcode 26 or newer
 
 CoreBluetooth requires an `NSBluetoothAlwaysUsageDescription` entry in your app's `Info.plist`.
 
@@ -103,7 +103,7 @@ let snapshot = try await client.fetch(.all)
 print("Battery:", snapshot.charge?.batteryLevel ?? 0, "%")
 print("Inside:", snapshot.climate?.insideTempCelsius ?? 0, "°C")
 
-let drive = try await client.fetchDrive()           // 2-second fast path
+let drive = try await client.fetchDrive()           // drive-only fast path
 print("Speed:", drive.speedMph ?? 0, "mph")
 
 await client.disconnect()
@@ -116,7 +116,7 @@ Queries return typed payloads instead of a `Void` acknowledgement. Use `query(_:
 ```swift
 switch try await client.query(.keySummary) {
 case .keySummary(let info):
-    print("Whitelisted slots:", info.keyCount)
+    print("Whitelist entries:", info.numberOfEntries)
 default: break
 }
 
@@ -168,14 +168,14 @@ Full type details live in [`Sources/TeslaBLE/Commands/Command.swift`](Sources/Te
 ```
 Sources/TeslaBLE/
   Client/     — TeslaVehicleClient public actor, ConnectionState
-  Commands/   — Command enum, VehicleQuery, StateQuery, encoders, ResponseDecoder
+  Commands/   — Command enum, VehicleQuery, StateQuery, CommandEncoder + Subcommands/, ResponseDecoder
   Crypto/     — P256ECDH, SessionKey, CounterWindow, MetadataHash, MessageAuthenticator
-  Session/    — VehicleSession actor, SessionNegotiator, OutboundSigner, InboundVerifier
+  Session/    — VehicleSession actor, SessionNegotiator, SessionMetadata, OutboundSigner, InboundVerifier
   Dispatcher/ — Dispatcher actor, RequestTable, MessageTransport protocol
   Transport/  — BLETransport (CoreBluetooth), MessageFramer
   Keys/       — TeslaKeyStore protocol, KeychainTeslaKeyStore, KeyPairFactory
   Model/      — TeslaVehicleSnapshot, per-section state types, VehicleSnapshotMapper
-  Support/    — TeslaBLEError, TeslaBLELogger, VINHelper
+  Support/    — TeslaBLEError, TeslaBLELogger, Log, LogMessage, VINHelper
   Generated/  — protoc-gen-swift outputs from Vendor/tesla-vehicle-command
 ```
 
@@ -183,7 +183,7 @@ Key invariants:
 
 - `TeslaVehicleClient` is an actor. Each instance represents one session with one vehicle (keyed by VIN).
 - Session state is per-domain; `connect(mode: .normal)` negotiates both VCSEC and Infotainment in sequence.
-- `VehicleSnapshotMapper` is the only file in `Sources/` that sees `CarServer_*` protobuf types; everything else works with Swift-native model types.
+- Hand-written public API takes and returns Swift-native types. The one exception is `VehicleQueryResult`, whose cases wrap the raw protobuf messages by design; this is why the generated types are public.
 - Crypto lives entirely in CryptoKit. The SHA-1 truncation in session-key derivation is a Tesla wire-compat requirement, not a recommended KDF.
 
 ## Testing
@@ -192,7 +192,7 @@ Key invariants:
 swift test
 ```
 
-178 tests covering the crypto primitives (with fixture vectors dumped from Tesla's Go reference), session sign/verify round-trips, dispatcher scenarios, every command encoder and query decoder, and the snapshot mapper. All deterministic — no real BLE or hardware required.
+Tests cover the crypto primitives (with fixture vectors dumped from Tesla's Go reference), session sign/verify round-trips, dispatcher scenarios, every command encoder and query decoder, and the snapshot mapper. All deterministic — no real BLE or hardware required.
 
 ```bash
 make format   # swiftformat + prettier (Vendor/ and Generated/ excluded)
@@ -214,7 +214,7 @@ After regenerating, run `swift build && swift test`. Any compile error is most l
 
 ## Caveats
 
-- **Hardware validation is the user's responsibility.** Every layer is fixture-tested against the Go reference, and all 141 unit tests pass, but BLE + vehicle + real cryptographic rotation against a parked Model 3/Y/S/X is the only thing that proves end-to-end correctness. Plug this package into an example iOS app, pair against your own vehicle, and file issues for anything that misbehaves.
+- **Hardware validation is the user's responsibility.** Every layer is fixture-tested against the Go reference, but BLE + vehicle + real cryptographic rotation against a parked Model 3/Y/S/X is the only thing that proves end-to-end correctness. Plug this package into an example iOS app, pair against your own vehicle, and file issues for anything that misbehaves.
 - **iOS-first.** macOS 13 is supported only as a test host for the pure-logic suite. CoreBluetooth semantics on macOS have not been validated against real Tesla hardware.
 - **No Fleet API.** This package is deliberately BLE-only. `KeyRole` exposes `.owner` and `.driver`; fleet-manager / charging-manager / vehicle-monitor roles are intentionally not available.
 - **Key loss = pairing loss.** `KeychainTeslaKeyStore` uses `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Keys do not sync to iCloud and are not included in device backups. Restoring to a new device requires re-pairing.

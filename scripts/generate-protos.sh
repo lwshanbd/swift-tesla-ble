@@ -35,8 +35,8 @@ fi
 mkdir -p "$SWIFT_OUT"
 
 # Generate all .proto files in one invocation.
-#   --swift_opt=Visibility=Public   — make generated types part of TeslaBLE's public-ish surface
-#                                     so Commands/, Session/ etc. can reference them internally
+#   --swift_opt=Visibility=Public   — VehicleQueryResult's public cases wrap generated messages,
+#                                     so the generated types must be public
 #   --swift_opt=FileNaming=DropPath — emit <basename>.pb.swift flat under $SWIFT_OUT
 protoc \
     --proto_path="$PROTO_SRC" \
@@ -55,7 +55,7 @@ next steps:
   2. Run 'swift build' — if any TeslaBLE source file references a type that
      disappeared, the compile error points to the affected command encoder /
      decoder. Adapt them.
-  3. Run 'swift test' — 91 tests should still pass unless the proto wire
+  3. Run 'swift test' — all tests should still pass unless the proto wire
      format itself changed (rare). Any failures indicate a real upstream
      change that needs a manual port.
   4. Commit the regenerated files together with any encoder / decoder updates.
