@@ -22,12 +22,18 @@ actor FakeTransport: MessageTransport {
     private var pendingInbound: [Data] = []
     private var pendingReceiveContinuations: [CheckedContinuation<Data, Swift.Error>] = []
     private var stubbedError: Swift.Error?
+    private var sendFailure: Swift.Error?
     private var closed = false
 
     // MARK: - Protocol conformance
 
     func sendMessage(_ data: Data) async throws {
-        if closed { throw Error.receiveCancelled }
+        if let sendFailure {
+            throw sendFailure
+        }
+        if closed {
+            throw Error.receiveCancelled
+        }
         sent.append(data)
     }
 
@@ -68,6 +74,13 @@ actor FakeTransport: MessageTransport {
             cont.resume(throwing: error)
             stubbedError = nil
         }
+    }
+
+    /// Make every later `sendMessage` fail with `error` while leaving the
+    /// receive side untouched, so a transmit failure can be observed without
+    /// also tearing down the dispatcher's inbound loop.
+    func failSends(with error: Swift.Error) {
+        sendFailure = error
     }
 
     /// Close the transport, waking any suspended receiver with a cancellation

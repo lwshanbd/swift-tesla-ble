@@ -2,13 +2,16 @@ import os
 
 /// Severity level for a log message, ordered from most verbose to most severe.
 public enum TeslaBLELogLevel: Int, Comparable, Sendable {
-    /// Fine-grained tracing useful during development.
+    /// High-frequency tracing: every advertisement seen while scanning, every
+    /// request sent and response matched.
     case debug = 0
-    /// Normal operational events.
+    /// Lifecycle milestones, a handful per session: scan started, vehicle
+    /// found, GATT ready, session established, state transitions.
     case info = 1
-    /// Recoverable anomalies that the caller may want to surface.
+    /// Recoverable anomalies: request timeouts, vehicle-reported faults,
+    /// response verification failures, unexpected BLE disconnects.
     case warning = 2
-    /// Failures that typically end the current operation.
+    /// Failures that end the connect attempt or the session.
     case error = 3
 
     public static func < (lhs: Self, rhs: Self) -> Bool {
@@ -27,9 +30,13 @@ public enum TeslaBLELogLevel: Int, Comparable, Sendable {
 /// before evaluating the closure; evaluating it unconditionally defeats
 /// the purpose of deferred construction.
 ///
-/// `category` corresponds to an OSLog category such as `"transport"`,
-/// `"session"`, or `"addkey"`. TeslaBLE uses a small fixed set so that
-/// Console.app filters remain usable.
+/// `category` corresponds to an OSLog category and is one of `"client"`,
+/// `"dispatcher"`, or `"transport"`.
+///
+/// Messages never contain the VIN, message payloads, or key material: the
+/// SDK builds them from a compile-time whitelist of value types, and errors
+/// are rendered without their payload (SDK errors as `Type.case`, any other
+/// error as `domain code`).
 public protocol TeslaBLELogger: Sendable {
     /// Logs a single message at the given severity and category.
     ///
@@ -47,12 +54,26 @@ public protocol TeslaBLELogger: Sendable {
 
 /// Default `TeslaBLELogger` implementation backed by `os.Logger`.
 ///
-/// Messages below `minimumLevel` are dropped without evaluating the
-/// message closure. By default every interpolated value is logged with
-/// `privacy: .private`, because BLE session traffic routinely contains
-/// key material, VIN fragments, and session tokens that should not appear
-/// in Console.app on non-developer devices. Set `publicMessages` to
-/// `true` only in development builds where call sites have been audited.
+/// Levels map onto OSLog types so that everything needed to diagnose a
+/// field issue is persisted on device and survives `log collect`:
+///
+/// | TeslaBLE   | OSLog    | Persisted |
+/// |------------|----------|-----------|
+/// | `.debug`   | `debug`  | No        |
+/// | `.info`    | `notice` | Yes       |
+/// | `.warning` | `error`  | Yes       |
+/// | `.error`   | `error`  | Yes       |
+///
+/// Messages below `minimumLevel` are dropped without evaluating the message
+/// closure. Message text is logged with `privacy: .public` by default, which
+/// is safe because TeslaBLE messages cannot contain the VIN, payloads, or
+/// keys (see ``TeslaBLELogger``). The default applies to every string passed
+/// to ``log(_:category:_:)``, including an app's own calls. Set
+/// `publicMessages` to `false` to have OSLog redact every message as
+/// `<private>` outside a debugger.
+///
+/// Changed after 1.0.0: `.info` previously mapped to OSLog `info` and
+/// `.warning` to `notice`, and `publicMessages` defaulted to `false`.
 public struct OSLogTeslaBLELogger: TeslaBLELogger {
     private let subsystem: String
     private let minimumLevel: TeslaBLELogLevel
@@ -63,12 +84,12 @@ public struct OSLogTeslaBLELogger: TeslaBLELogger {
     /// - Parameters:
     ///   - subsystem: OSLog subsystem string. Defaults to `"TeslaBLE"`.
     ///   - minimumLevel: Messages below this level are discarded cheaply.
-    ///   - publicMessages: When `true`, interpolated values are logged
-    ///     with `privacy: .public`. Use only in trusted development builds.
+    ///   - publicMessages: When `true` (the default), message text is logged
+    ///     with `privacy: .public`; when `false`, with `privacy: .private`.
     public init(
         subsystem: String = "TeslaBLE",
         minimumLevel: TeslaBLELogLevel = .debug,
-        publicMessages: Bool = false,
+        publicMessages: Bool = true,
     ) {
         self.subsystem = subsystem
         self.minimumLevel = minimumLevel
@@ -95,18 +116,16 @@ public struct OSLogTeslaBLELogger: TeslaBLELogger {
     private func logPrivate(_ logger: Logger, level: TeslaBLELogLevel, text: String) {
         switch level {
         case .debug: logger.debug("\(text, privacy: .private)")
-        case .info: logger.info("\(text, privacy: .private)")
-        case .warning: logger.notice("\(text, privacy: .private)")
-        case .error: logger.error("\(text, privacy: .private)")
+        case .info: logger.notice("\(text, privacy: .private)")
+        case .warning, .error: logger.error("\(text, privacy: .private)")
         }
     }
 
     private func logPublic(_ logger: Logger, level: TeslaBLELogLevel, text: String) {
         switch level {
         case .debug: logger.debug("\(text, privacy: .public)")
-        case .info: logger.info("\(text, privacy: .public)")
-        case .warning: logger.notice("\(text, privacy: .public)")
-        case .error: logger.error("\(text, privacy: .public)")
+        case .info: logger.notice("\(text, privacy: .public)")
+        case .warning, .error: logger.error("\(text, privacy: .public)")
         }
     }
 }

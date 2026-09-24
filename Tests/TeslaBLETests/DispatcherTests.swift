@@ -97,12 +97,12 @@ final class DispatcherTests: XCTestCase {
         // suspends. The tasks run concurrently but table access is serialized
         // by the actor.
         let taskA = Task { () -> UniversalMessage_RoutableMessage in
-            return try await withCheckedThrowingContinuation { cont in
+            try await withCheckedThrowingContinuation { cont in
                 Task { try? await actor.register(uuid: uuidA, continuation: cont) }
             }
         }
         let taskB = Task { () -> UniversalMessage_RoutableMessage in
-            return try await withCheckedThrowingContinuation { cont in
+            try await withCheckedThrowingContinuation { cont in
                 Task { try? await actor.register(uuid: uuidB, continuation: cont) }
             }
         }
@@ -211,7 +211,9 @@ final class DispatcherTests: XCTestCase {
         var outbound: [Data] = []
         for _ in 0 ..< 50 {
             outbound = await transport.sentMessages
-            if !outbound.isEmpty { break }
+            if !outbound.isEmpty {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertEqual(outbound.count, 1, "dispatcher should have written exactly one outbound message")
@@ -326,7 +328,9 @@ final class DispatcherTests: XCTestCase {
         var outbound: [Data] = []
         for _ in 0 ..< 50 {
             outbound = await transport.sentMessages
-            if !outbound.isEmpty { break }
+            if !outbound.isEmpty {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertEqual(outbound.count, 1)
@@ -364,7 +368,9 @@ final class DispatcherTests: XCTestCase {
         // Wait for the outbound write to confirm the send is registered and suspended.
         for _ in 0 ..< 50 {
             let sent = await transport.sentMessages
-            if !sent.isEmpty { break }
+            if !sent.isEmpty {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
 
@@ -415,7 +421,9 @@ final class DispatcherTests: XCTestCase {
         var outbound: [Data] = []
         for _ in 0 ..< 50 {
             outbound = await transport.sentMessages
-            if !outbound.isEmpty { break }
+            if !outbound.isEmpty {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertEqual(outbound.count, 1)
@@ -536,7 +544,9 @@ final class DispatcherTests: XCTestCase {
         var outbound: [Data] = []
         for _ in 0 ..< 50 {
             outbound = await transport.sentMessages
-            if !outbound.isEmpty { break }
+            if !outbound.isEmpty {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertEqual(outbound.count, 1)
@@ -571,7 +581,9 @@ final class DispatcherTests: XCTestCase {
         var outbound: [Data] = []
         for _ in 0 ..< 50 {
             outbound = await transport.sentMessages
-            if !outbound.isEmpty { break }
+            if !outbound.isEmpty {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertEqual(outbound.count, 1)
@@ -855,7 +867,9 @@ final class DispatcherTests: XCTestCase {
     private func waitForFirstOutbound(_ transport: FakeTransport) async throws -> Data {
         for _ in 0 ..< 100 {
             let sent = await transport.sentMessages
-            if let first = sent.first { return first }
+            if let first = sent.first {
+                return first
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTFail("no outbound message")
@@ -1100,6 +1114,388 @@ final class DispatcherTests: XCTestCase {
             XCTFail("missing routingAddress"); return
         }
         XCTAssertNotEqual(a0, a1, "each outbound message should get a fresh routing address")
+
+        await dispatcher.stop()
+    }
+
+    // MARK: - Logging
+
+    private func waitForEntry(
+        in recorder: RecordingLogger,
+        where predicate: (RecordingLogger.Entry) -> Bool,
+    ) async throws -> RecordingLogger.Entry {
+        for _ in 0 ..< 100 {
+            if let match = recorder.entries.first(where: predicate) {
+                return match
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTFail("no matching log entry in \(recorder.entries)")
+        throw Dispatcher.Error.timeout
+    }
+
+    func testDispatcherLogsRequestTimeoutAsWarning() async throws {
+        let recorder = RecordingLogger()
+        let dispatcher = Dispatcher(transport: FakeTransport(), logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .infotainment), forDomain: .infotainment)
+
+        _ = try? await dispatcher.send(Data("x".utf8), domain: .infotainment, timeout: .milliseconds(100))
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertEqual(warning.category, "dispatcher")
+        XCTAssertTrue(warning.message.contains("timeout"), warning.message)
+        XCTAssertTrue(warning.message.contains("infotainment"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    func testDispatcherLogsProtocolFaultAsWarningNamingFault() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .infotainment), forDomain: .infotainment)
+
+        let sendTask = Task { try await dispatcher.send(Data("x".utf8), domain: .infotainment, timeout: .seconds(2)) }
+        let outboundRequest = try await UniversalMessage_RoutableMessage(serializedBytes: waitForFirstOutbound(transport))
+        var response = UniversalMessage_RoutableMessage()
+        stampRouting(on: &response, respondingTo: outboundRequest, domain: .infotainment)
+        response.requestUuid = outboundRequest.uuid
+        var status = UniversalMessage_MessageStatus()
+        status.signedMessageFault = .rrorInsufficientPrivileges
+        response.signedMessageStatus = status
+        try await transport.enqueueInbound(response.serializedData())
+        _ = try? await sendTask.value
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("rrorInsufficientPrivileges"), warning.message)
+        XCTAssertTrue(warning.message.contains("infotainment"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    func testDispatcherLogsOperationErrorAsWarning() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .infotainment), forDomain: .infotainment)
+
+        let sendTask = Task { try await dispatcher.send(Data("x".utf8), domain: .infotainment, timeout: .seconds(2)) }
+        let outboundRequest = try await UniversalMessage_RoutableMessage(serializedBytes: waitForFirstOutbound(transport))
+        var response = UniversalMessage_RoutableMessage()
+        stampRouting(on: &response, respondingTo: outboundRequest, domain: .infotainment)
+        response.requestUuid = outboundRequest.uuid
+        var status = UniversalMessage_MessageStatus()
+        status.operationStatus = .rror
+        response.signedMessageStatus = status
+        try await transport.enqueueInbound(response.serializedData())
+        _ = try? await sendTask.value
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("operation"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    func testDispatcherLogsVerifyFailureAsWarning() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .vehicleSecurity), forDomain: .vehicleSecurity)
+
+        let sendTask = Task { try await dispatcher.send(Data("lock".utf8), domain: .vehicleSecurity, timeout: .seconds(2)) }
+        let outboundRequest = try await UniversalMessage_RoutableMessage(serializedBytes: waitForFirstOutbound(transport))
+        let forged = try makeResponseBytes(
+            respondingTo: outboundRequest,
+            plaintext: Data("OK".utf8),
+            counter: 1,
+            sessionKey: SessionKey(rawBytes: Data(repeating: 0x24, count: 16)),
+            verifierName: Data("test_verifier".utf8),
+            domain: .vehicleSecurity,
+        )
+        await transport.enqueueInbound(forged)
+        _ = try? await sendTask.value
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("verify"), warning.message)
+        XCTAssertTrue(warning.message.contains("vehicleSecurity"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    func testDispatcherLogsTransmitFailureAsWarning() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .infotainment), forDomain: .infotainment)
+        await transport.failSends(with: FakeTransport.Error.receiveStubbedFailure("radio off"))
+
+        _ = try? await dispatcher.send(Data("x".utf8), domain: .infotainment, timeout: .seconds(2))
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("transmit"), warning.message)
+        XCTAssertTrue(warning.message.contains("infotainment"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    /// The inbound loop dying while the dispatcher is running means every
+    /// later request will time out — that is session-ending, not a warning.
+    func testDispatcherLogsInboundLoopFailureWhileRunningAsError() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+
+        await transport.stubNextReceiveFailure(FakeTransport.Error.receiveStubbedFailure("link lost"))
+
+        let entry = try await waitForEntry(in: recorder) { $0.level == .error }
+        XCTAssertTrue(entry.message.contains("inbound"), entry.message)
+        XCTAssertFalse(entry.message.contains("link lost"), "error payload must not be logged: \(entry.message)")
+
+        await dispatcher.stop()
+    }
+
+    /// A requested stop tears down the inbound loop too; that exit is
+    /// expected and must not look like an anomaly in the log.
+    func testDispatcherStopLogsPendingCountWithoutAnomalies() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .vehicleSecurity), forDomain: .vehicleSecurity)
+        let sendTask = Task { try await dispatcher.send(Data("lock".utf8), domain: .vehicleSecurity, timeout: .seconds(30)) }
+        _ = try await waitForFirstOutbound(transport)
+
+        await dispatcher.stop()
+        await transport.close()
+        _ = try? await sendTask.value
+        _ = try await waitForEntry(in: recorder) { $0.message.contains("inbound loop stopped") }
+
+        let stopped = try XCTUnwrap(recorder.entries.first { $0.message.contains("pending=") }, "\(recorder.entries)")
+        XCTAssertEqual(stopped.level, .info)
+        XCTAssertTrue(stopped.message.contains("pending=1"), stopped.message)
+        XCTAssertEqual(recorder.entries.filter { $0.level >= .warning }, [])
+    }
+
+    func testDispatcherLogsInstalledSessionAsInfo() async throws {
+        let recorder = RecordingLogger()
+        let dispatcher = Dispatcher(transport: FakeTransport(), logger: recorder)
+
+        await dispatcher.installSession(makeSession(domain: .infotainment), forDomain: .infotainment)
+
+        let entry = try XCTUnwrap(recorder.entries.first, "\(recorder.entries)")
+        XCTAssertEqual(entry.level, .info)
+        XCTAssertTrue(entry.message.contains("infotainment"), entry.message)
+    }
+
+    func testDispatcherLogsOnlyDebugTracesOnSuccessfulRoundTrip() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .vehicleSecurity), forDomain: .vehicleSecurity)
+
+        let sendTask = Task { try await dispatcher.send(Data("lock".utf8), domain: .vehicleSecurity, timeout: .seconds(2)) }
+        let outboundRequest = try await UniversalMessage_RoutableMessage(serializedBytes: waitForFirstOutbound(transport))
+        try await transport.enqueueInbound(makeResponseBytes(
+            respondingTo: outboundRequest,
+            plaintext: Data("OK".utf8),
+            counter: 1,
+            sessionKey: makeSessionKey(),
+            verifierName: Data("test_verifier".utf8),
+            domain: .vehicleSecurity,
+        ))
+        _ = try await sendTask.value
+
+        XCTAssertEqual(recorder.entries.filter { $0.level >= .warning }, [])
+        XCTAssertTrue(
+            recorder.entries.contains { $0.level == .debug && $0.message.contains("latency=") },
+            "\(recorder.entries)",
+        )
+
+        await dispatcher.stop()
+    }
+
+    /// Answers a SessionInfoRequest the way a vehicle would, HMAC-tagged with
+    /// `tagKey` so a test can force a tag mismatch.
+    private func makeSessionInfoResponse(
+        respondingTo request: UniversalMessage_RoutableMessage,
+        info: Signatures_SessionInfo,
+        tagKey: SessionKey,
+        verifierName: Data,
+    ) throws -> Data {
+        let encoded = try info.serializedData()
+        var hmac = Signatures_HMAC_Signature_Data()
+        hmac.tag = try SessionNegotiator.computeSessionInfoTag(
+            sessionKey: tagKey,
+            verifierName: verifierName,
+            challenge: request.uuid,
+            encodedInfo: encoded,
+        )
+        var sig = Signatures_SignatureData()
+        sig.sigType = .sessionInfoTag(hmac)
+        var response = UniversalMessage_RoutableMessage()
+        response.requestUuid = request.uuid
+        stampRouting(on: &response, respondingTo: request, domain: .vehicleSecurity)
+        response.payload = .sessionInfo(encoded)
+        response.subSigData = .signatureData(sig)
+        return try response.serializedData()
+    }
+
+    /// Starts a VCSEC handshake and returns the pieces a test needs to answer it.
+    private func beginNegotiation(
+        _ dispatcher: Dispatcher,
+        over transport: FakeTransport,
+    ) async throws -> (
+        task: Task<(Signatures_SessionInfo, SessionKey), Swift.Error>,
+        request: UniversalMessage_RoutableMessage,
+        vehicleKey: P256.KeyAgreement.PrivateKey,
+        sessionKey: SessionKey,
+    ) {
+        let clientKey = P256.KeyAgreement.PrivateKey()
+        let vehicleKey = P256.KeyAgreement.PrivateKey()
+        let sessionKey = try SessionKey.derive(fromSharedSecret: P256ECDH.sharedSecret(
+            localScalar: vehicleKey.rawRepresentation,
+            peerPublicUncompressed: clientKey.publicKey.x963Representation,
+        ))
+        let task = Task { () throws -> (Signatures_SessionInfo, SessionKey) in
+            try await dispatcher.negotiate(
+                domain: .vehicleSecurity,
+                localPrivateKey: clientKey,
+                verifierName: Data("test_verifier".utf8),
+                timeout: .seconds(2),
+            )
+        }
+        let request = try await UniversalMessage_RoutableMessage(serializedBytes: waitForFirstOutbound(transport))
+        return (task, request, vehicleKey, sessionKey)
+    }
+
+    /// `keyNotOnWhitelist` is the most common first-connect failure in the
+    /// field; it has to be visible in a persisted log.
+    func testDispatcherLogsNonOkSessionStatusAsWarning() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        let handshake = try await beginNegotiation(dispatcher, over: transport)
+
+        var info = Signatures_SessionInfo()
+        info.publicKey = handshake.vehicleKey.publicKey.x963Representation
+        info.epoch = Data(repeating: 0xAB, count: 16)
+        info.status = .keyNotOnWhitelist
+        try await transport.enqueueInbound(makeSessionInfoResponse(
+            respondingTo: handshake.request,
+            info: info,
+            tagKey: handshake.sessionKey,
+            verifierName: Data("test_verifier".utf8),
+        ))
+        _ = try? await handshake.task.value
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("keyNotOnWhitelist"), warning.message)
+        XCTAssertTrue(warning.message.contains("vehicleSecurity"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    /// A vehicle that does not know the key may not produce a verifiable
+    /// tag; the status still has to reach the log (Go checks it first too).
+    func testDispatcherLogsSessionStatusEvenWhenTagFails() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        let handshake = try await beginNegotiation(dispatcher, over: transport)
+
+        var info = Signatures_SessionInfo()
+        info.publicKey = handshake.vehicleKey.publicKey.x963Representation
+        info.status = .keyNotOnWhitelist
+        try await transport.enqueueInbound(makeSessionInfoResponse(
+            respondingTo: handshake.request,
+            info: info,
+            tagKey: SessionKey(rawBytes: Data(repeating: 0x24, count: 16)),
+            verifierName: Data("test_verifier".utf8),
+        ))
+        _ = try? await handshake.task.value
+
+        XCTAssertTrue(
+            recorder.entries.contains { $0.level == .warning && $0.message.contains("keyNotOnWhitelist") },
+            "\(recorder.entries)",
+        )
+
+        await dispatcher.stop()
+    }
+
+    func testDispatcherLogsHandshakeTagMismatchReason() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        let handshake = try await beginNegotiation(dispatcher, over: transport)
+
+        var info = Signatures_SessionInfo()
+        info.publicKey = handshake.vehicleKey.publicKey.x963Representation
+        try await transport.enqueueInbound(makeSessionInfoResponse(
+            respondingTo: handshake.request,
+            info: info,
+            tagKey: SessionKey(rawBytes: Data(repeating: 0x24, count: 16)),
+            verifierName: Data("test_verifier".utf8),
+        ))
+        _ = try? await handshake.task.value
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("hmacMismatch"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    /// A vehicle that refuses the handshake answers with a bare
+    /// `signedMessageStatus`; the fault code is the only diagnosis.
+    func testDispatcherLogsHandshakeFault() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        let handshake = try await beginNegotiation(dispatcher, over: transport)
+
+        var response = UniversalMessage_RoutableMessage()
+        response.requestUuid = handshake.request.uuid
+        stampRouting(on: &response, respondingTo: handshake.request, domain: .vehicleSecurity)
+        var status = UniversalMessage_MessageStatus()
+        status.signedMessageFault = .rrorUnknownKeyID
+        response.signedMessageStatus = status
+        try await transport.enqueueInbound(response.serializedData())
+        _ = try? await handshake.task.value
+
+        let warning = try XCTUnwrap(recorder.entries.first { $0.level == .warning }, "\(recorder.entries)")
+        XCTAssertTrue(warning.message.contains("rrorUnknownKeyID"), warning.message)
+
+        await dispatcher.stop()
+    }
+
+    /// Once the inbound loop has died (already logged as an error), every
+    /// later request fails for the same reason; repeating that at warning
+    /// level per request would flood the persisted log at poll rate.
+    func testDispatcherDemotesRequestFailuresAfterInboundLoopDies() async throws {
+        let recorder = RecordingLogger()
+        let transport = FakeTransport()
+        let dispatcher = Dispatcher(transport: transport, logger: recorder)
+        try await dispatcher.start()
+        await dispatcher.installSession(makeSession(domain: .infotainment), forDomain: .infotainment)
+        await transport.stubNextReceiveFailure(FakeTransport.Error.receiveStubbedFailure("link lost"))
+        _ = try await waitForEntry(in: recorder) { $0.level == .error }
+
+        await transport.failSends(with: FakeTransport.Error.receiveStubbedFailure("radio off"))
+        _ = try? await dispatcher.send(Data("x".utf8), domain: .infotainment, timeout: .seconds(2))
+
+        let transmit = try XCTUnwrap(recorder.entries.first { $0.message.contains("transmit") }, "\(recorder.entries)")
+        XCTAssertEqual(transmit.level, .debug)
+        XCTAssertEqual(recorder.entries.filter { $0.level == .warning }, [])
 
         await dispatcher.stop()
     }

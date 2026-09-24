@@ -127,6 +127,27 @@ default: break
 }
 ```
 
+### Logging
+
+Pass a logger to see what the SDK is doing. `OSLogTeslaBLELogger` routes into the unified log, so a `log collect` from the device after a field issue contains the session history:
+
+```swift
+let client = TeslaVehicleClient(
+    vin: "5YJ...",
+    keyStore: keyStore,
+    logger: OSLogTeslaBLELogger(subsystem: "com.example.app"),
+)
+```
+
+| Level      | Used for                                                                           | OSLog type | Persisted |
+| ---------- | ---------------------------------------------------------------------------------- | ---------- | --------- |
+| `.debug`   | Per-advertisement and per-request tracing                                          | `debug`    | No        |
+| `.info`    | Lifecycle: scan, vehicle found, GATT ready, session installed, state transitions   | `notice`   | Yes       |
+| `.warning` | Recoverable anomalies: timeouts, vehicle faults, verify failures, unexpected drops | `error`    | Yes       |
+| `.error`   | Failures that end the connect attempt or the session                               | `error`    | Yes       |
+
+Messages never contain the VIN, message payloads, or key material. The SDK builds them from a compile-time whitelist of value types, and errors are rendered without their payload (SDK errors as `Type.case`, any other error as `domain code`). That is why `OSLogTeslaBLELogger` logs message text as public by default — including any strings your app passes to it directly; pass `publicMessages: false` to have OSLog redact everything.
+
 ## Command surface
 
 Commands are grouped by functional domain. Each group is its own nested enum; `CommandEncoder` routes every case to the correct BLE domain under the hood.

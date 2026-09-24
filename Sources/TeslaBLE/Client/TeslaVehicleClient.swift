@@ -18,12 +18,18 @@ public actor TeslaVehicleClient {
     /// VIN of the vehicle this client is bound to.
     public let vin: String
     private let keyStore: any TeslaKeyStore
+    /// Forwarded to the transport and dispatcher, which bind their own
+    /// categories.
     private let logger: (any TeslaBLELogger)?
+    private let log: Log
 
     private var transport: BLETransport?
     private var dispatcher: Dispatcher?
 
     private var _state: ConnectionState = .disconnected
+    /// Bumped by `disconnect()` before it suspends, so an in-flight
+    /// `connect()` can tell its failure was caused by a requested teardown.
+    private var disconnectGeneration = 0
     private let stream: AsyncStream<ConnectionState>
     private let streamContinuation: AsyncStream<ConnectionState>.Continuation
 
@@ -49,6 +55,7 @@ public actor TeslaVehicleClient {
         self.vin = vin
         self.keyStore = keyStore
         self.logger = logger
+        log = Log(logger, category: .client)
         let (stream, continuation) = AsyncStream.makeStream(of: ConnectionState.self)
         self.stream = stream
         streamContinuation = continuation
@@ -113,11 +120,19 @@ public actor TeslaVehicleClient {
         timeout: Duration = .seconds(30),
     ) async throws {
         guard _state == .disconnected else {
-            logger?.log(.warning, category: "client", "connect() called while in state \(_state); ignoring")
+            log.warning("connect ignored: state=\(_state)")
             return
         }
+        log.info("connect: mode=\(mode) timeout=\(timeout)")
+        let generation = disconnectGeneration
 
-        let privateKey = try loadPrivateKey()
+        let privateKey: P256.KeyAgreement.PrivateKey
+        do {
+            privateKey = try loadPrivateKey()
+        } catch {
+            log.error("connect failed: stage=keyLoad error=\(error)")
+            throw error
+        }
 
         // BLE connect.
         let transport = BLETransport(logger: logger)
@@ -131,7 +146,13 @@ public actor TeslaVehicleClient {
         do {
             try await transport.connect(vin: vin, timeout: Self.seconds(timeout))
         } catch {
-            logger?.log(.error, category: "client", "BLE connect failed: \(error)")
+            // A disconnect() issued mid-connect tears the transport down but
+            // cannot cancel the pending scan; its eventual failure is expected.
+            if disconnectGeneration == generation {
+                log.error("connect failed: stage=ble error=\(error)")
+            } else {
+                log.info("connect abandoned: stage=ble error=\(error)")
+            }
             await tearDown()
             throw Self.mapTransportError(error)
         }
@@ -142,6 +163,7 @@ public actor TeslaVehicleClient {
         do {
             try await dispatcher.start()
         } catch {
+            log.error("connect failed: stage=dispatcher error=\(error)")
             await tearDown()
             throw TeslaBLEError.handshakeFailed(underlying: String(describing: error))
         }
@@ -158,6 +180,7 @@ public actor TeslaVehicleClient {
                 dispatcher: dispatcher,
                 localPrivateKey: privateKey,
                 timeout: timeout,
+                generation: generation,
             )
         } catch {
             await tearDown()
@@ -170,6 +193,8 @@ public actor TeslaVehicleClient {
     /// Tears down the BLE session and returns to
     /// ``ConnectionState/disconnected``. Safe to call in any state.
     public func disconnect() async {
+        disconnectGeneration += 1
+        log.info("disconnect requested: state=\(_state)")
         await tearDown()
     }
 
@@ -225,18 +250,24 @@ public actor TeslaVehicleClient {
         domain: UniversalMessage_Domain,
     ) throws {
         let result: ResponseDecoder.CommandResult
-        switch domain {
-        case .vehicleSecurity:
-            result = try ResponseDecoder.decodeVCSEC(responseBytes)
-        case .infotainment:
-            result = try ResponseDecoder.decodeInfotainment(responseBytes)
-        default:
-            throw TeslaBLEError.handshakeFailed(underlying: "unknown domain \(domain)")
+        do {
+            switch domain {
+            case .vehicleSecurity:
+                result = try ResponseDecoder.decodeVCSEC(responseBytes)
+            case .infotainment:
+                result = try ResponseDecoder.decodeInfotainment(responseBytes)
+            default:
+                throw TeslaBLEError.handshakeFailed(underlying: "unknown domain \(domain)")
+            }
+        } catch let error as ResponseDecoder.Error {
+            log.warning("command failed: domain=\(domain) reason=decode error=\(error)")
+            throw error
         }
         switch result {
         case .ok, .okWithPayload:
             return
         case let .vehicleError(code, reason):
+            log.warning("command rejected: domain=\(domain) code=\(code)")
             throw TeslaBLEError.commandRejected(code: code, reason: reason)
         }
     }
@@ -304,6 +335,7 @@ public actor TeslaVehicleClient {
         do {
             return try VehicleQueryDecoder.decode(query, from: responseBytes)
         } catch {
+            log.warning("query failed: reason=decode error=\(error)")
             throw TeslaBLEError.fetchFailed(underlying: String(describing: error))
         }
     }
@@ -327,12 +359,19 @@ public actor TeslaVehicleClient {
         do {
             let response = try CarServer_Response(serializedBytes: responseBytes)
             guard case let .vehicleData(data)? = response.responseMsg else {
+                // Typically an actionStatus error in place of the data.
+                if response.hasActionStatus {
+                    log.warning("fetch failed: reason=noVehicleData result=\(response.actionStatus.result)")
+                } else {
+                    log.warning("fetch failed: reason=noVehicleData")
+                }
                 throw TeslaBLEError.fetchFailed(underlying: "response has no vehicleData payload")
             }
             return data
         } catch let error as TeslaBLEError {
             throw error
         } catch {
+            log.warning("fetch failed: reason=decode error=\(error)")
             throw TeslaBLEError.fetchFailed(underlying: String(describing: error))
         }
     }
@@ -354,6 +393,7 @@ public actor TeslaVehicleClient {
         dispatcher: Dispatcher,
         localPrivateKey: P256.KeyAgreement.PrivateKey,
         timeout: Duration,
+        generation: Int,
     ) async throws {
         let verifierName = Data(vin.utf8)
         let localPublicKey = localPrivateKey.publicKey.x963Representation
@@ -368,6 +408,11 @@ public actor TeslaVehicleClient {
                     timeout: timeout,
                 )
             } catch {
+                if disconnectGeneration == generation {
+                    log.error("connect failed: stage=handshake domain=\(domain) error=\(error)")
+                } else {
+                    log.info("connect abandoned: stage=handshake domain=\(domain) error=\(error)")
+                }
                 throw TeslaBLEError.handshakeFailed(
                     underlying: "domain \(domain) negotiate: \(error)",
                 )
@@ -389,9 +434,13 @@ public actor TeslaVehicleClient {
     private func handleTransportStateChange(_ bleState: BLETransport.ConnectionState) {
         switch bleState {
         case .disconnected:
-            if _state != .disconnected { updateState(.disconnected) }
+            if _state != .disconnected {
+                updateState(.disconnected)
+            }
         case .scanning:
-            if _state == .disconnected { updateState(.scanning) }
+            if _state == .disconnected {
+                updateState(.scanning)
+            }
         case .connecting:
             updateState(.connecting)
         case .connected:
@@ -401,13 +450,15 @@ public actor TeslaVehicleClient {
     }
 
     private func updateState(_ newState: ConnectionState) {
+        log.info("state: \(_state) → \(newState)")
         _state = newState
         streamContinuation.yield(newState)
-        logger?.log(.debug, category: "client", "state → \(newState)")
     }
 
     private func tearDown() async {
-        if let dispatcher { await dispatcher.stop() }
+        if let dispatcher {
+            await dispatcher.stop()
+        }
         dispatcher = nil
         transport?.disconnect()
         transport = nil

@@ -69,7 +69,9 @@ public struct KeychainTeslaKeyStore: TeslaKeyStore {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
+        if status == errSecItemNotFound {
+            return nil
+        }
         guard status == errSecSuccess, let data = result as? Data else {
             throw TeslaBLEError.keychain(status)
         }

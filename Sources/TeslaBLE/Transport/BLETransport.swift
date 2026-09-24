@@ -25,7 +25,7 @@ final class BLETransport: NSObject, Sendable {
     // All mutable BLE state is confined to this serial queue. CoreBluetooth
     // delegate callbacks are also delivered on this queue via CBCentralManager.
     private let queue = DispatchQueue(label: "TeslaBLE.BLETransport", qos: .userInitiated)
-    private let logger: (any TeslaBLELogger)?
+    private let log: Log
     private nonisolated(unsafe) var centralManager: CBCentralManager!
     private nonisolated(unsafe) var peripheral: CBPeripheral?
     private nonisolated(unsafe) var txCharacteristic: CBCharacteristic?
@@ -33,6 +33,9 @@ final class BLETransport: NSObject, Sendable {
     private nonisolated(unsafe) var mtu: Int = 20
     private nonisolated(unsafe) var writeType: CBCharacteristicWriteType = .withResponse
     private nonisolated(unsafe) var targetLocalName: String?
+    /// Set by `disconnect()`. A transport is single-use, so this never
+    /// resets; it separates requested teardown from link loss in the logs.
+    private nonisolated(unsafe) var disconnectRequested = false
 
     private nonisolated(unsafe) var inputBuffer = Data()
     private nonisolated(unsafe) var lastRxTime: Date?
@@ -44,7 +47,7 @@ final class BLETransport: NSObject, Sendable {
     nonisolated(unsafe) var onStateChange: (@Sendable (ConnectionState) -> Void)?
 
     init(logger: (any TeslaBLELogger)? = nil) {
-        self.logger = logger
+        log = Log(logger, category: .transport)
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: queue)
     }
@@ -53,7 +56,6 @@ final class BLETransport: NSObject, Sendable {
     /// Times out after `timeout` seconds if vehicle is not found.
     func connect(vin: String, timeout: TimeInterval = 30) async throws {
         targetLocalName = VINHelper.bleLocalName(for: vin)
-        logger?.log(.debug, category: "transport", "Target local name: \(targetLocalName ?? "nil") for VIN: \(vin)")
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -63,7 +65,7 @@ final class BLETransport: NSObject, Sendable {
                             startScanning()
                         } else {
                             updateState(.scanning)
-                            logger?.log(.debug, category: "transport", "Waiting for Bluetooth to power on (current state: \(centralManager.state.rawValue))")
+                            log.info("waiting for bluetooth: state=\(centralManager.state)")
                         }
                     }
                 }
@@ -80,6 +82,13 @@ final class BLETransport: NSObject, Sendable {
                 group.cancelAll()
                 // Clean up scanning state
                 self.queue.async { [self] in
+                    // `state` tells whether the vehicle was never found
+                    // (scanning) or the GATT setup stalled (connecting).
+                    if disconnectRequested {
+                        log.info("connect abandoned: state=\(state) error=\(error)")
+                    } else {
+                        log.warning("connect aborted: state=\(state) error=\(error)")
+                    }
                     centralManager.stopScan()
                     if let cont = connectionContinuation {
                         connectionContinuation = nil
@@ -97,7 +106,7 @@ final class BLETransport: NSObject, Sendable {
 
     private func startScanning() {
         updateState(.scanning)
-        logger?.log(.debug, category: "transport", "Starting scan for vehicle (no service filter, matching by local name)...")
+        log.info("scan started")
         centralManager.scanForPeripherals(
             withServices: nil,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false],
@@ -114,6 +123,7 @@ final class BLETransport: NSObject, Sendable {
             throw BLEError.messageTooLarge
         }
         let chunks = MessageFramer.fragment(framed, mtu: mtu)
+        log.debug("tx: bytes=\(framed.count) chunks=\(chunks.count)")
         for chunk in chunks {
             peripheral.writeValue(chunk, for: txCharacteristic, type: writeType)
         }
@@ -135,6 +145,8 @@ final class BLETransport: NSObject, Sendable {
 
     func disconnect() {
         queue.async { [self] in
+            disconnectRequested = true
+            log.info("disconnect requested: state=\(state)")
             if let peripheral {
                 centralManager.cancelPeripheralConnection(peripheral)
             }
@@ -174,13 +186,14 @@ final class BLETransport: NSObject, Sendable {
 extension BLETransport: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         assertOnTransportQueue()
-        logger?.log(.debug, category: "transport", "Central manager state changed: \(central.state.rawValue)")
         if central.state == .poweredOn {
+            log.info("bluetooth state: \(central.state)")
             // If we're waiting to connect, start scanning now
             if connectionContinuation != nil, state != .connecting, state != .connected {
                 startScanning()
             }
         } else {
+            log.warning("bluetooth state: \(central.state) transport=\(state)")
             connectionContinuation?.resume(throwing: BLEError.bluetoothUnavailable)
             connectionContinuation = nil
         }
@@ -194,9 +207,10 @@ extension BLETransport: CBCentralManagerDelegate {
     ) {
         let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         assertOnTransportQueue()
-        logger?.log(.debug, category: "transport", "Discovered: name=\(localName ?? "nil") peripheral=\(peripheral.name ?? "unnamed") rssi=\(RSSI) target=\(targetLocalName ?? "nil")")
-        guard localName == targetLocalName else { return }
-        logger?.log(.debug, category: "transport", "Found target vehicle! Connecting...")
+        let isTarget = localName == targetLocalName
+        log.debug("advertisement: match=\(isTarget) rssi=\(RSSI.intValue)")
+        guard isTarget else { return }
+        log.info("vehicle found: rssi=\(RSSI.intValue)")
         central.stopScan()
         self.peripheral = peripheral
         peripheral.delegate = self
@@ -206,7 +220,7 @@ extension BLETransport: CBCentralManagerDelegate {
 
     nonisolated func centralManager(_: CBCentralManager, didConnect peripheral: CBPeripheral) {
         assertOnTransportQueue()
-        logger?.log(.debug, category: "transport", "Connected to peripheral, discovering services...")
+        log.info("peripheral connected")
         peripheral.discoverServices([Self.vehicleServiceUUID])
     }
 
@@ -216,6 +230,7 @@ extension BLETransport: CBCentralManagerDelegate {
         error: Error?,
     ) {
         assertOnTransportQueue()
+        log.warning("peripheral connect failed: error=\(error)")
         connectionContinuation?.resume(throwing: error ?? BLEError.connectionFailed)
         connectionContinuation = nil
         cleanup()
@@ -224,9 +239,14 @@ extension BLETransport: CBCentralManagerDelegate {
     nonisolated func centralManager(
         _: CBCentralManager,
         didDisconnectPeripheral _: CBPeripheral,
-        error _: Error?,
+        error: Error?,
     ) {
         assertOnTransportQueue()
+        if !disconnectRequested {
+            log.warning("peripheral disconnected unexpectedly: error=\(error) pendingReceives=\(receiveContinuations.count)")
+        } else {
+            log.info("peripheral disconnected")
+        }
         cleanup()
         // Fail any pending receives
         for cont in receiveContinuations {
@@ -239,9 +259,10 @@ extension BLETransport: CBCentralManagerDelegate {
 // MARK: - CBPeripheralDelegate
 
 extension BLETransport: CBPeripheralDelegate {
-    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices _: Error?) {
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         assertOnTransportQueue()
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.vehicleServiceUUID }) else {
+            log.warning("service discovery failed: error=\(error)")
             connectionContinuation?.resume(throwing: BLEError.serviceNotFound)
             connectionContinuation = nil
             return
@@ -255,10 +276,11 @@ extension BLETransport: CBPeripheralDelegate {
     nonisolated func peripheral(
         _ peripheral: CBPeripheral,
         didDiscoverCharacteristicsFor service: CBService,
-        error _: Error?,
+        error: Error?,
     ) {
         assertOnTransportQueue()
         guard let characteristics = service.characteristics else {
+            log.warning("characteristic discovery failed: error=\(error)")
             connectionContinuation?.resume(throwing: BLEError.characteristicsNotFound)
             connectionContinuation = nil
             return
@@ -280,7 +302,7 @@ extension BLETransport: CBPeripheralDelegate {
             writeType = .withResponse
             mtu = peripheral.maximumWriteValueLength(for: .withResponse)
         }
-        logger?.log(.debug, category: "transport", "Characteristics discovered. TX=\(txCharacteristic != nil) RX=\(rxCharacteristic != nil) MTU=\(mtu) writeType=\(writeType == .withResponse ? "withResponse" : "withoutResponse") txProperties=\(txCharacteristic?.properties.rawValue ?? 0)")
+        log.info("gatt ready: tx=\(txCharacteristic != nil) rx=\(rxCharacteristic != nil) mtu=\(mtu) writeType=\(writeType)")
         updateState(.connected)
         connectionContinuation?.resume()
         connectionContinuation = nil
@@ -289,14 +311,20 @@ extension BLETransport: CBPeripheralDelegate {
     nonisolated func peripheral(
         _: CBPeripheral,
         didUpdateValueFor characteristic: CBCharacteristic,
-        error _: Error?,
+        error: Error?,
     ) {
         assertOnTransportQueue()
-        guard characteristic.uuid == Self.fromVehicleUUID,
-              let value = characteristic.value else { return }
+        guard characteristic.uuid == Self.fromVehicleUUID else { return }
+        if let error {
+            log.warning("rx notification error: error=\(error)")
+        }
+        guard let value = characteristic.value else { return }
 
         let now = Date()
         if let lastRx = lastRxTime, now.timeIntervalSince(lastRx) > Self.rxTimeout {
+            if !inputBuffer.isEmpty {
+                log.warning("rx buffer reset: dropped=\(inputBuffer.count) bytes after gap")
+            }
             inputBuffer = Data()
         }
         lastRxTime = now
@@ -306,8 +334,36 @@ extension BLETransport: CBPeripheralDelegate {
         // Only extract when someone is waiting — otherwise leave in inputBuffer
         // so the next receive() call picks it up via tryFlush().
         while !receiveContinuations.isEmpty, let message = tryFlush() {
+            log.debug("rx: bytes=\(message.count)")
             let continuation = receiveContinuations.removeFirst()
             continuation.resume(returning: message)
+        }
+    }
+
+    nonisolated func peripheral(
+        _: CBPeripheral,
+        didUpdateNotificationStateFor characteristic: CBCharacteristic,
+        error: Error?,
+    ) {
+        assertOnTransportQueue()
+        guard characteristic.uuid == Self.fromVehicleUUID else { return }
+        // Without notifications no response can arrive; every request would
+        // silently time out.
+        if let error {
+            log.warning("rx subscribe failed: error=\(error)")
+        } else {
+            log.info("rx subscribed: notifying=\(characteristic.isNotifying)")
+        }
+    }
+
+    nonisolated func peripheral(
+        _: CBPeripheral,
+        didWriteValueFor _: CBCharacteristic,
+        error: Error?,
+    ) {
+        assertOnTransportQueue()
+        if let error {
+            log.warning("tx write failed: error=\(error)")
         }
     }
 }

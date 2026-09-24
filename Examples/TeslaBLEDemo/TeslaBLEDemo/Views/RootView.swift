@@ -27,7 +27,11 @@ struct RootView: View {
             "Error",
             isPresented: Binding(
                 get: { controller.lastError != nil },
-                set: { if !$0 { bindable.lastError = nil } },
+                set: {
+                    if !$0 {
+                        bindable.lastError = nil
+                    }
+                },
             ),
             actions: { Button("OK") {} },
             message: { Text(controller.lastError ?? "") },

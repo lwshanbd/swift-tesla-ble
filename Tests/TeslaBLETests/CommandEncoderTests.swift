@@ -108,12 +108,16 @@ final class CommandEncoderTests: XCTestCase {
         guard case let .chargingStartStopAction(startSub)? = startAction.vehicleAction.vehicleActionMsg else {
             XCTFail("expected chargingStartStopAction"); return
         }
-        if case .start? = startSub.chargingAction {} else { XCTFail("expected .start") }
+        if case .start? = startSub.chargingAction {} else {
+            XCTFail("expected .start")
+        }
 
         let (_, stopBody) = try CommandEncoder.encode(.charge(.stop))
         let stopAction = try CarServer_Action(serializedBytes: stopBody)
         guard case let .chargingStartStopAction(stopSub)? = stopAction.vehicleAction.vehicleActionMsg else { XCTFail(); return }
-        if case .stop? = stopSub.chargingAction {} else { XCTFail("expected .stop") }
+        if case .stop? = stopSub.chargingAction {} else {
+            XCTFail("expected .stop")
+        }
     }
 
     func testChargeSetLimit() throws {
@@ -204,11 +208,15 @@ final class CommandEncoderTests: XCTestCase {
     func testMediaNextPrevious() throws {
         let (_, nextBody) = try CommandEncoder.encode(.media(.nextTrack))
         let nextAction = try CarServer_Action(serializedBytes: nextBody)
-        if case .mediaNextTrack? = nextAction.vehicleAction.vehicleActionMsg {} else { XCTFail() }
+        if case .mediaNextTrack? = nextAction.vehicleAction.vehicleActionMsg {} else {
+            XCTFail()
+        }
 
         let (_, prevBody) = try CommandEncoder.encode(.media(.previousTrack))
         let prevAction = try CarServer_Action(serializedBytes: prevBody)
-        if case .mediaPreviousTrack? = prevAction.vehicleAction.vehicleActionMsg {} else { XCTFail() }
+        if case .mediaPreviousTrack? = prevAction.vehicleAction.vehicleActionMsg {} else {
+            XCTFail()
+        }
     }
 
     func testMediaSetVolume() throws {
@@ -271,14 +279,18 @@ final class CommandEncoderTests: XCTestCase {
         let (_, body) = try CommandEncoder.encode(.actions(.closeWindows))
         let action = try CarServer_Action(serializedBytes: body)
         guard case let .vehicleControlWindowAction(sub)? = action.vehicleAction.vehicleActionMsg else { XCTFail(); return }
-        if case .close? = sub.action {} else { XCTFail("expected .close") }
+        if case .close? = sub.action {} else {
+            XCTFail("expected .close")
+        }
     }
 
     func testActionsVentWindows() throws {
         let (_, body) = try CommandEncoder.encode(.actions(.ventWindows))
         let action = try CarServer_Action(serializedBytes: body)
         guard case let .vehicleControlWindowAction(sub)? = action.vehicleAction.vehicleActionMsg else { XCTFail(); return }
-        if case .vent? = sub.action {} else { XCTFail("expected .vent") }
+        if case .vent? = sub.action {} else {
+            XCTFail("expected .vent")
+        }
     }
 
     func testActionsHomelink() throws {
@@ -451,14 +463,18 @@ final class CommandEncoderTests: XCTestCase {
         let (domain, body) = try CommandEncoder.encode(.media(.nextFavorite))
         XCTAssertEqual(domain, .infotainment)
         let action = try CarServer_Action(serializedBytes: body)
-        if case .mediaNextFavorite? = action.vehicleAction.vehicleActionMsg {} else { XCTFail() }
+        if case .mediaNextFavorite? = action.vehicleAction.vehicleActionMsg {} else {
+            XCTFail()
+        }
     }
 
     func testMediaPreviousFavorite() throws {
         let (domain, body) = try CommandEncoder.encode(.media(.previousFavorite))
         XCTAssertEqual(domain, .infotainment)
         let action = try CarServer_Action(serializedBytes: body)
-        if case .mediaPreviousFavorite? = action.vehicleAction.vehicleActionMsg {} else { XCTFail() }
+        if case .mediaPreviousFavorite? = action.vehicleAction.vehicleActionMsg {} else {
+            XCTFail()
+        }
     }
 
     // Group H — Infotainment (software update / vehicle name)
@@ -475,7 +491,9 @@ final class CommandEncoderTests: XCTestCase {
         let (domain, body) = try CommandEncoder.encode(.infotainment(.cancelSoftwareUpdate))
         XCTAssertEqual(domain, .infotainment)
         let action = try CarServer_Action(serializedBytes: body)
-        if case .vehicleControlCancelSoftwareUpdateAction? = action.vehicleAction.vehicleActionMsg {} else { XCTFail() }
+        if case .vehicleControlCancelSoftwareUpdateAction? = action.vehicleAction.vehicleActionMsg {} else {
+            XCTFail()
+        }
     }
 
     func testInfotainmentSetVehicleName() throws {
@@ -785,8 +803,12 @@ final class CommandEncoderTests: XCTestCase {
         }
         XCTAssertEqual(sub.hvacSeatHeaterAction.count, 1)
         let item = sub.hvacSeatHeaterAction[0]
-        if case .seatHeaterHigh? = item.seatHeaterLevel {} else { XCTFail("expected seatHeaterHigh") }
-        if case .carSeatFrontLeft? = item.seatPosition {} else { XCTFail("expected carSeatFrontLeft") }
+        if case .seatHeaterHigh? = item.seatHeaterLevel {} else {
+            XCTFail("expected seatHeaterHigh")
+        }
+        if case .carSeatFrontLeft? = item.seatPosition {} else {
+            XCTFail("expected carSeatFrontLeft")
+        }
     }
 
     func testClimateSetSeatCooler() throws {

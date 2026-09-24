@@ -39,7 +39,7 @@ actor Dispatcher {
     }
 
     private let transport: MessageTransport
-    private let logger: (any TeslaBLELogger)?
+    private let log: Log
 
     /// Stable 16-byte routing address used by every Infotainment outbound
     /// message. Chosen once at construction. Mirrors `d.address` in Go.
@@ -50,10 +50,14 @@ actor Dispatcher {
     private var requestTable = RequestTable()
     private var inboundTask: Task<Void, Never>?
     private var started = false
+    /// Set once the inbound loop dies while running. Every later request
+    /// fails as a consequence, so those failures are traced at debug instead
+    /// of repeating the already-logged root cause at poll rate.
+    private var inboundTerminated = false
 
     init(transport: MessageTransport, logger: (any TeslaBLELogger)? = nil) {
         self.transport = transport
-        self.logger = logger
+        log = Log(logger, category: .dispatcher)
         infotainmentAddress = Self.newRoutingAddress()
     }
 
@@ -68,6 +72,7 @@ actor Dispatcher {
     }
 
     func stop() async {
+        log.info("stopped: pending=\(requestTable.count)")
         started = false
         inboundTask?.cancel()
         inboundTask = nil
@@ -80,8 +85,9 @@ actor Dispatcher {
         switch domain {
         case .vehicleSecurity: vcsecSession = session
         case .infotainment: infotainmentSession = session
-        default: break
+        default: return
         }
+        log.info("session installed: domain=\(domain)")
     }
 
     // MARK: - Outbound
@@ -130,14 +136,8 @@ actor Dispatcher {
         let frozenRequest = request
 
         // Register and transmit.
-        let response: UniversalMessage_RoutableMessage
-        do {
-            response = try await withRegisteredRequest(token: token, timeout: timeout) { [self] in
-                try await transmit(message: frozenRequest)
-            }
-        } catch let e as Error where e == .timeout {
-            logger?.log(.error, category: "dispatcher", "send timeout on domain \(domain)")
-            throw Error.timeout
+        let response = try await withRegisteredRequest(token: token, domain: domain, timeout: timeout) { [self] in
+            try await transmit(message: frozenRequest)
         }
 
         // Protocol-layer fault check. Vehicles return errors as a bare
@@ -147,10 +147,12 @@ actor Dispatcher {
         if response.hasSignedMessageStatus {
             let status = response.signedMessageStatus
             if status.signedMessageFault != .rrorNone {
+                log.warning("protocol fault: domain=\(domain) fault=\(status.signedMessageFault)")
                 let name = String(describing: status.signedMessageFault)
                 throw Error.decodingFailed("protocol fault on domain \(domain): \(name)")
             }
             if status.operationStatus == .rror {
+                log.warning("operation error: domain=\(domain)")
                 throw Error.decodingFailed("operation error on domain \(domain)")
             }
         }
@@ -159,6 +161,7 @@ actor Dispatcher {
         do {
             return try await session.verify(response: response, requestID: responseMatchID)
         } catch {
+            log.warning("response verify failed: domain=\(domain) error=\(error)")
             throw Error.decodingFailed(String(describing: error))
         }
     }
@@ -191,14 +194,8 @@ actor Dispatcher {
         let token = routeToken(forDomain: domain, uuid: requestUUID, routingAddress: fromAddress)
         let frozenRequest = request
 
-        let response: UniversalMessage_RoutableMessage
-        do {
-            response = try await withRegisteredRequest(token: token, timeout: timeout) { [self] in
-                try await transmit(message: frozenRequest)
-            }
-        } catch let e as Error where e == .timeout {
-            logger?.log(.error, category: "dispatcher", "sendUnsigned timeout on domain \(domain)")
-            throw Error.timeout
+        let response = try await withRegisteredRequest(token: token, domain: domain, timeout: timeout) { [self] in
+            try await transmit(message: frozenRequest)
         }
 
         // Return the raw response payload bytes. No session verify since
@@ -289,6 +286,7 @@ actor Dispatcher {
 
         let response: UniversalMessage_RoutableMessage = try await withRegisteredRequest(
             token: token,
+            domain: domain,
             timeout: timeout,
         ) { [self] in
             try await transmit(message: request)
@@ -296,12 +294,25 @@ actor Dispatcher {
 
         // Extract encodedInfo and tag from response.
         guard case let .sessionInfo(encodedInfo)? = response.payload else {
+            // A refusing vehicle answers with a bare status; its fault code
+            // is the only diagnosis.
+            let fault = response.signedMessageStatus.signedMessageFault
+            log.warning("handshake rejected: domain=\(domain) reason=missingSessionInfo fault=\(fault)")
             throw Error.unexpectedResponse("negotiate response missing sessionInfo payload")
         }
+        // Checked before any signature verification, like Go's
+        // `protocol.GetError`: a vehicle that does not know the key may not
+        // produce a verifiable tag, and the status is the actual diagnosis.
+        // The handshake result itself is unaffected.
+        if let status = try? Signatures_SessionInfo(serializedBytes: encodedInfo).status, status != .ok {
+            log.warning("session status: domain=\(domain) status=\(status)")
+        }
         guard case let .signatureData(sigData)? = response.subSigData else {
+            log.warning("handshake rejected: domain=\(domain) reason=missingSignature")
             throw Error.unexpectedResponse("negotiate response missing signature data")
         }
         guard case let .sessionInfoTag(hmacSig)? = sigData.sigType else {
+            log.warning("handshake rejected: domain=\(domain) reason=wrongSignatureType")
             throw Error.unexpectedResponse("negotiate response has wrong signature type")
         }
         let expectedTag = hmacSig.tag
@@ -311,6 +322,7 @@ actor Dispatcher {
         do {
             info = try Signatures_SessionInfo(serializedBytes: encodedInfo)
         } catch {
+            log.warning("handshake rejected: domain=\(domain) reason=sessionInfoDecode error=\(error)")
             throw Error.decodingFailed("SessionInfo: \(error)")
         }
 
@@ -322,6 +334,7 @@ actor Dispatcher {
                 peerPublicUncompressed: info.publicKey,
             )
         } catch {
+            log.warning("handshake rejected: domain=\(domain) reason=ecdh error=\(error)")
             throw Error.decodingFailed("ECDH: \(error)")
         }
         let sessionKey = SessionKey.derive(fromSharedSecret: sharedSecret)
@@ -334,6 +347,7 @@ actor Dispatcher {
             encodedInfo: encodedInfo,
         )
         guard Self.constantTimeEqual(computedTag, expectedTag) else {
+            log.warning("handshake rejected: domain=\(domain) reason=hmacMismatch")
             throw Error.unexpectedResponse("SessionInfo HMAC tag mismatch")
         }
 
@@ -432,16 +446,19 @@ actor Dispatcher {
     /// the inbound loop, the timeout task, and `stop()` / `cancelAll`.
     private func withRegisteredRequest(
         token: Data,
+        domain: UniversalMessage_Domain,
         timeout: Duration,
         transmit: @Sendable @escaping () async throws -> Void,
     ) async throws -> UniversalMessage_RoutableMessage {
-        try await withCheckedThrowingContinuation { (cont: RequestTable.Continuation) in
+        let start = ContinuousClock.now
+        let response = try await withCheckedThrowingContinuation { (cont: RequestTable.Continuation) in
             do {
                 try requestTable.register(token: token, continuation: cont)
             } catch {
                 cont.resume(throwing: error)
                 return
             }
+            log.debug("request: domain=\(domain) token=\(token: token) timeout=\(timeout)")
 
             Task { [weak self] in
                 // Transmit outside the register-or-throw critical section so
@@ -449,13 +466,13 @@ actor Dispatcher {
                 do {
                     try await transmit()
                 } catch {
-                    await self?.failRequest(token: token, error: error)
+                    await self?.abortRequest(token: token, domain: domain, error: error)
                     return
                 }
 
                 do {
                     try await Task.sleep(nanoseconds: Self.durationToNanoseconds(timeout))
-                    await self?.failRequest(token: token, error: Error.timeout)
+                    await self?.expireRequest(token: token, domain: domain, timeout: timeout)
                 } catch {
                     // Task cancelled — the continuation may already have been
                     // completed by the inbound loop; attempt to fail is a
@@ -464,10 +481,32 @@ actor Dispatcher {
                 }
             }
         }
+        log.debug("response: domain=\(domain) token=\(token: token) latency=\(ContinuousClock.now - start)")
+        return response
     }
 
     private func failRequest(token: Data, error: Swift.Error) {
         _ = requestTable.fail(token: token, error: error)
+    }
+
+    /// Only logs when the request was still pending; a response that won the
+    /// race already unregistered the token.
+    private func expireRequest(token: Data, domain: UniversalMessage_Domain, timeout: Duration) {
+        guard requestTable.fail(token: token, error: Error.timeout) else { return }
+        logRequestFailure("request timeout: domain=\(domain) token=\(token: token) after=\(timeout)")
+    }
+
+    private func abortRequest(token: Data, domain: UniversalMessage_Domain, error: Swift.Error) {
+        guard requestTable.fail(token: token, error: error) else { return }
+        logRequestFailure("transmit failed: domain=\(domain) token=\(token: token) error=\(error)")
+    }
+
+    private func logRequestFailure(_ message: @autoclosure () -> LogMessage) {
+        if inboundTerminated {
+            log.debug(message())
+        } else {
+            log.warning(message())
+        }
     }
 
     // MARK: - Inbound loop
@@ -478,8 +517,16 @@ actor Dispatcher {
             do {
                 bytes = try await transport.receiveMessage()
             } catch {
-                logger?.log(.warning, category: "dispatcher", "inbound loop exit: \(error)")
+                let pending = requestTable.count
                 requestTable.cancelAll(error: Error.shutdown)
+                // After stop() the loop is expected to unwind; while running,
+                // losing it means no response can ever be matched again.
+                if started {
+                    inboundTerminated = true
+                    log.error("inbound loop terminated: pending=\(pending) error=\(error)")
+                } else {
+                    log.debug("inbound loop stopped")
+                }
                 return
             }
 
@@ -487,7 +534,7 @@ actor Dispatcher {
             do {
                 message = try UniversalMessage_RoutableMessage(serializedBytes: bytes)
             } catch {
-                logger?.log(.warning, category: "dispatcher", "dropping undecodable inbound frame: \(error)")
+                log.warning("dropping undecodable frame: bytes=\(bytes.count) error=\(error)")
                 continue
             }
 
@@ -502,16 +549,13 @@ actor Dispatcher {
             await maybeResyncFromInbound(message)
 
             guard let token = inboundToken(for: message) else {
-                logger?.log(.debug, category: "dispatcher", "unroutable inbound message (no token); dropping")
+                log.debug("dropping unroutable message: no token")
                 continue
             }
             let routed = requestTable.complete(token: token, with: message)
             if !routed {
-                logger?.log(
-                    .warning,
-                    category: "dispatcher",
-                    "no pending request for token \(token.map { String(format: "%02x", $0) }.joined()); dropping",
-                )
+                let fromDomain = message.hasFromDestination ? message.fromDestination.domain : .broadcast
+                log.warning("dropping unmatched response: domain=\(fromDomain) token=\(token: token)")
             }
         }
     }
@@ -532,7 +576,7 @@ actor Dispatcher {
         // For VCSEC responses this is the only place Swift uses the field.
         let challenge = message.requestUuid
         guard !challenge.isEmpty else {
-            logger?.log(.warning, category: "dispatcher", "proactive sessionInfo has empty requestUuid; skipping resync")
+            log.warning("session resync skipped: domain=\(fromDomain) reason=emptyRequestUuid")
             return
         }
 
@@ -540,7 +584,7 @@ actor Dispatcher {
         do {
             info = try Signatures_SessionInfo(serializedBytes: encodedInfo)
         } catch {
-            logger?.log(.warning, category: "dispatcher", "proactive sessionInfo decode failed: \(error)")
+            log.warning("session resync skipped: domain=\(fromDomain) decode error=\(error)")
             return
         }
 
@@ -556,16 +600,16 @@ actor Dispatcher {
                 encodedInfo: encodedInfo,
             )
         } catch {
-            logger?.log(.warning, category: "dispatcher", "proactive sessionInfo HMAC compute failed: \(error)")
+            log.warning("session resync skipped: domain=\(fromDomain) hmac error=\(error)")
             return
         }
         guard Self.constantTimeEqual(computedTag, hmacSig.tag) else {
-            logger?.log(.warning, category: "dispatcher", "proactive sessionInfo HMAC mismatch; ignoring")
+            log.warning("session resync rejected: domain=\(fromDomain) reason=hmacMismatch")
             return
         }
 
         await targetSession.resync(fromSessionInfo: info)
-        logger?.log(.info, category: "dispatcher", "session resynced from inbound sessionInfo on \(fromDomain)")
+        log.info("session resynced: domain=\(fromDomain) counter=\(info.counter)")
     }
 
     // MARK: - Constants & helpers

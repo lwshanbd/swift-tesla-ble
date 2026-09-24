@@ -41,6 +41,7 @@ final class VehicleController {
     private let store: PairedVehicleStore
     private let defaults: UserDefaults
     private let logger = Logger(subsystem: Constants.bundleIdentifier, category: "controller")
+    private let bleLogger = OSLogTeslaBLELogger(subsystem: Constants.bundleIdentifier)
 
     private var client: TeslaVehicleClient?
     private var stateObserverTask: Task<Void, Never>?
@@ -97,7 +98,7 @@ final class VehicleController {
             }
             let publicKey = KeyPairFactory.publicKeyBytes(of: privateKey)
 
-            let pairingClient = TeslaVehicleClient(vin: vin, keyStore: keyStore)
+            let pairingClient = TeslaVehicleClient(vin: vin, keyStore: keyStore, logger: bleLogger)
             do {
                 try await pairingClient.connect(mode: .pairing)
                 try await pairingClient.send(
@@ -179,7 +180,7 @@ final class VehicleController {
         }
         guard client == nil else { return }
 
-        let newClient = TeslaVehicleClient(vin: vin, keyStore: keyStore)
+        let newClient = TeslaVehicleClient(vin: vin, keyStore: keyStore, logger: bleLogger)
         client = newClient
 
         // Subscribe to state transitions. This stream never finishes for the
@@ -188,7 +189,9 @@ final class VehicleController {
             for await state in newClient.stateStream {
                 guard let self else { return }
                 await MainActor.run { self.connectionState = state }
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    return
+                }
             }
         }
 
