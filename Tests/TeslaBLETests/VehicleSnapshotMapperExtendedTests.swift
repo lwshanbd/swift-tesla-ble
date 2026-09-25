@@ -208,6 +208,7 @@ final class VehicleSnapshotMapperExtendedTests: XCTestCase {
         climate.climateKeeperMode = keeper
         climate.cabinOverheatProtection = .cabinOverheatProtectionFanOnly
         climate.cabinOverheatProtectionActivelyCooling = true
+        climate.copActivationTemperature = .medium
         data.climateState = climate
 
         let c = VehicleSnapshotMapper.map(data).climate
@@ -231,6 +232,7 @@ final class VehicleSnapshotMapperExtendedTests: XCTestCase {
         XCTAssertEqual(c?.climateKeeperMode, .camp)
         XCTAssertEqual(c?.cabinOverheatProtection, .fanOnly)
         XCTAssertEqual(c?.cabinOverheatProtectionActivelyCooling, true)
+        XCTAssertEqual(c?.cabinOverheatProtectionActivationTemp, .medium)
     }
 
     func testClosuresExtras() {

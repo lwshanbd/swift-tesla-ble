@@ -91,6 +91,15 @@ public struct ClimateState: Sendable, Equatable {
     public var cabinOverheatProtection: CabinOverheatProtection? = nil
     /// Whether cabin overheat protection is cooling right now. Nil if the vehicle did not report this field.
     public var cabinOverheatProtectionActivelyCooling: Bool? = nil
+    /// Cabin temperature at which overheat protection starts. Nil if the vehicle did not report this field.
+    public var cabinOverheatProtectionActivationTemp: CabinOverheatActivationTemp? = nil
+
+    /// Cabin overheat protection activation level.
+    public enum CabinOverheatActivationTemp: Sendable, Equatable {
+        case low
+        case medium
+        case high
+    }
 
     /// Steering wheel heat level.
     public enum SteeringWheelHeatLevel: Sendable, Equatable {

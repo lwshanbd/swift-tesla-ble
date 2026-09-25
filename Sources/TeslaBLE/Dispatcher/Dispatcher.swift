@@ -166,8 +166,8 @@ actor Dispatcher {
         }
     }
 
-    /// Unsigned send: used ONLY for the `addKey` pairing bootstrap, where the
-    /// vehicle accepts a plaintext request without an established session.
+    /// Unsigned send for VCSEC requests the vehicle accepts in plaintext
+    /// without an established session (the body-controller state request).
     /// Returns the raw `protobufMessageAsBytes` payload from the response
     /// (typically a `VCSEC_FromVCSECMessage`); no session verify is performed.
     func sendUnsigned(

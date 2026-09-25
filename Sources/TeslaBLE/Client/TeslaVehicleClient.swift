@@ -313,6 +313,11 @@ public actor TeslaVehicleClient {
     /// - Parameters:
     ///   - query: The query to dispatch.
     ///   - timeout: Maximum time to wait for the response.
+    /// ``VehicleQuery/bodyControllerState`` is sent unsigned, as in Tesla's
+    /// `body-controller-state` command, so it also works after
+    /// ``ConnectMode/pairing`` and while Infotainment is asleep and the full
+    /// handshake cannot complete. Other queries need a session.
+    ///
     /// - Returns: A ``VehicleQueryResult`` whose case matches `query`.
     /// - Throws: ``TeslaBLEError`` on transport, timeout, or decode failure.
     public func query(
@@ -328,7 +333,11 @@ public actor TeslaVehicleClient {
         }
         let responseBytes: Data
         do {
-            responseBytes = try await dispatcher.send(body, domain: domain, timeout: timeout)
+            if case .bodyControllerState = query {
+                responseBytes = try await dispatcher.sendUnsigned(body, domain: domain, timeout: timeout)
+            } else {
+                responseBytes = try await dispatcher.send(body, domain: domain, timeout: timeout)
+            }
         } catch {
             throw Self.mapDispatcherError(error)
         }

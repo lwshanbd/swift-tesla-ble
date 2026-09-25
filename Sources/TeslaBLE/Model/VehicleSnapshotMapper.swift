@@ -128,6 +128,10 @@ enum VehicleSnapshotMapper {
             pb.optionalCabinOverheatProtectionActivelyCooling,
             pb.cabinOverheatProtectionActivelyCooling,
         )
+        state.cabinOverheatProtectionActivationTemp = ifSet(
+            pb.optionalCopActivationTemperature,
+            pb.copActivationTemperature,
+        ).flatMap(mapCopActivationTemp)
         return state
     }
 
@@ -443,6 +447,17 @@ enum VehicleSnapshotMapper {
         case .cabinOverheatProtectionOn: .on
         case .cabinOverheatProtectionFanOnly: .fanOnly
         case .UNRECOGNIZED: .unknown
+        }
+    }
+
+    private static func mapCopActivationTemp(
+        _ pb: CarServer_ClimateState.CopActivationTemp,
+    ) -> ClimateState.CabinOverheatActivationTemp? {
+        switch pb {
+        case .low: .low
+        case .medium: .medium
+        case .high: .high
+        case .unspecified, .UNRECOGNIZED: nil
         }
     }
 
