@@ -45,6 +45,78 @@ public struct ClimateState: Sendable, Equatable {
         case high = 3
     }
 
+    /// Whether the front defroster is on. Nil if the vehicle did not report this field.
+    public var isFrontDefrosterOn: Bool? = nil
+    /// Whether the rear defroster is on. Nil if the vehicle did not report this field.
+    public var isRearDefrosterOn: Bool? = nil
+    /// Lowest cabin setpoint the vehicle accepts, in °C. Nil if the vehicle did not report this field.
+    public var minAvailableTempCelsius: Double? = nil
+    /// Highest cabin setpoint the vehicle accepts, in °C. Nil if the vehicle did not report this field.
+    public var maxAvailableTempCelsius: Double? = nil
+    /// Rear left-back seat heater level. Nil if the vehicle did not report this field.
+    public var seatHeaterRearLeftBack: SeatHeaterLevel? = nil
+    /// Rear right-back seat heater level. Nil if the vehicle did not report this field.
+    public var seatHeaterRearRightBack: SeatHeaterLevel? = nil
+    /// Third-row left seat heater level. Nil if the vehicle did not report this field.
+    public var seatHeaterThirdRowLeft: SeatHeaterLevel? = nil
+    /// Third-row right seat heater level. Nil if the vehicle did not report this field.
+    public var seatHeaterThirdRowRight: SeatHeaterLevel? = nil
+    /// Front-left ventilated seat fan level, 0–3. Nil if the vehicle did not report this field.
+    public var seatFanFrontLeft: Int? = nil
+    /// Front-right ventilated seat fan level, 0–3. Nil if the vehicle did not report this field.
+    public var seatFanFrontRight: Int? = nil
+    /// Steering wheel heat level on vehicles with multi-level heating. Nil if the vehicle did not report this
+    /// field.
+    public var steeringWheelHeatLevel: SteeringWheelHeatLevel? = nil
+    /// Whether the steering wheel heater is managed automatically. Nil if the vehicle did not report this field.
+    public var autoSteeringWheelHeat: Bool? = nil
+    /// Whether automatic seat climate is on for the driver seat. Nil if the vehicle did not report this field.
+    public var autoSeatClimateLeft: Bool? = nil
+    /// Whether automatic seat climate is on for the front passenger seat. Nil if the vehicle did not report
+    /// this field.
+    public var autoSeatClimateRight: Bool? = nil
+    /// Whether the wiper blade heater is on. Nil if the vehicle did not report this field.
+    public var wiperBladeHeater: Bool? = nil
+    /// Whether the side mirror heaters are on. Nil if the vehicle did not report this field.
+    public var sideMirrorHeaters: Bool? = nil
+    /// Whether the cabin is preconditioning. Nil if the vehicle did not report this field.
+    public var isPreconditioning: Bool? = nil
+    /// Whether automatic HVAC conditioning is on. Nil if the vehicle did not report this field.
+    public var isAutoConditioningOn: Bool? = nil
+    /// Whether the battery heater wants power but has none. Nil if the vehicle did not report this field.
+    public var batteryHeaterNoPower: Bool? = nil
+    /// Climate keeper mode (Keep, Dog, Camp). Nil if the vehicle did not report this field.
+    public var climateKeeperMode: ClimateKeeperMode? = nil
+    /// Cabin overheat protection setting. Nil if the vehicle did not report this field.
+    public var cabinOverheatProtection: CabinOverheatProtection? = nil
+    /// Whether cabin overheat protection is cooling right now. Nil if the vehicle did not report this field.
+    public var cabinOverheatProtectionActivelyCooling: Bool? = nil
+
+    /// Steering wheel heat level.
+    public enum SteeringWheelHeatLevel: Sendable, Equatable {
+        case off
+        case low
+        case high
+        case unknown
+    }
+
+    /// Climate keeper mode.
+    public enum ClimateKeeperMode: Sendable, Equatable {
+        case off
+        case on
+        case dog
+        case camp
+        case unknown
+    }
+
+    /// Cabin overheat protection setting.
+    public enum CabinOverheatProtection: Sendable, Equatable {
+        case off
+        case on
+        case fanOnly
+        case unknown
+    }
+
     public init(
         insideTempCelsius: Double? = nil,
         outsideTempCelsius: Double? = nil,

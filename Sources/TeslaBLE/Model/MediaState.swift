@@ -13,6 +13,47 @@ public struct MediaState: Sendable, Equatable {
     /// Whether remote media control is currently permitted. Nil if the vehicle did not report this field.
     public var remoteControlEnabled: Bool?
 
+    /// Whether media is playing, paused or stopped. Nil if the vehicle did not report this field.
+    public var playbackStatus: PlaybackStatus? = nil
+    /// The active media source. Nil if the vehicle did not report this field.
+    public var nowPlayingSource: Source? = nil
+    /// Volume step used by volume up and down. Nil if the vehicle did not report this field.
+    public var audioVolumeIncrement: Double? = nil
+
+    /// Media playback status.
+    public enum PlaybackStatus: Sendable, Equatable {
+        case stopped
+        case playing
+        case paused
+    }
+
+    /// Media source. Sources without a case here are reported as ``other(_:)`` with the protocol's raw value.
+    public enum Source: Sendable, Equatable {
+        case none
+        case am
+        case fm
+        case xm
+        case siriusXm
+        case dab
+        case bluetooth
+        case localFiles
+        case iPod
+        case auxIn
+        case spotify
+        case tidal
+        case tuneIn
+        case slacker
+        case stingray
+        case onlineRadio
+        case qqMusic
+        case netEaseMusic
+        case ximalaya
+        case browser
+        case theater
+        case game
+        case other(Int)
+    }
+
     public init(
         nowPlayingArtist: String? = nil,
         nowPlayingTitle: String? = nil,

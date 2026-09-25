@@ -29,6 +29,14 @@ public struct DriveState: Sendable, Equatable {
         case drive
     }
 
+    /// Extra minutes on the active route caused by traffic. Nil if the vehicle did not report this field.
+    public var activeRouteTrafficMinutesDelay: Double? = nil
+    /// Predicted battery state of charge on arrival at the active route's destination, as reported by the
+    /// navigation planner. Nil if the vehicle did not report this field.
+    public var activeRouteEnergyAtArrival: Double? = nil
+    /// Coordinates of the active route's destination. Nil if the vehicle did not report this field.
+    public var activeRouteCoordinates: Coordinate? = nil
+
     public init(
         shiftState: ShiftState? = nil,
         speedMph: Double? = nil,

@@ -41,6 +41,50 @@ public struct ChargeState: Sendable, Equatable {
         case starting
     }
 
+    /// Charge percentage usable right now; lower than ``batteryLevel`` when the pack is cold. Nil if the vehicle
+    /// did not report this field.
+    public var usableBatteryLevel: Int? = nil
+    /// Ideal range in miles. Nil if the vehicle did not report this field.
+    public var idealBatteryRangeMiles: Double? = nil
+    /// Energy added in the current or most recent charging session, in kWh. Nil if the vehicle did not report
+    /// this field.
+    public var chargeEnergyAddedKWh: Double? = nil
+    /// Rated range added in the current or most recent charging session, in miles. Nil if the vehicle did not
+    /// report this field.
+    public var chargeMilesAddedRated: Double? = nil
+    /// Estimated minutes until the charge limit is reached. Nil if the vehicle did not report this field.
+    public var minutesToChargeLimit: Int? = nil
+    /// Number of AC phases in use. Nil if the vehicle did not report this field.
+    public var chargerPhases: Int? = nil
+    /// Current offered by the charger (pilot), in amps. Nil if the vehicle did not report this field.
+    public var chargerPilotCurrent: Int? = nil
+    /// Requested charging current, in amps. Nil if the vehicle did not report this field.
+    public var chargeCurrentRequest: Int? = nil
+    /// Maximum charging current the vehicle may request, in amps. Nil if the vehicle did not report this field.
+    public var chargeCurrentRequestMax: Int? = nil
+    /// Charging current set by the user, in amps. Nil if the vehicle did not report this field.
+    public var chargingAmps: Int? = nil
+    /// Whether a DC fast charger is connected. Nil if the vehicle did not report this field.
+    public var fastChargerPresent: Bool? = nil
+    /// Kind of DC fast charger connected. Nil if the vehicle did not report this field.
+    public var fastChargerType: FastChargerType? = nil
+    /// Whether a scheduled charge is waiting to start. Nil if the vehicle did not report this field.
+    public var scheduledChargingPending: Bool? = nil
+    /// Whether the charge port is in cold weather mode. Nil if the vehicle did not report this field.
+    public var chargePortColdWeatherMode: Bool? = nil
+
+    /// DC fast charger kind.
+    public enum FastChargerType: Sendable, Equatable {
+        case supercharger
+        case chademo
+        case gb
+        case combo
+        case acSingleWireCAN
+        case mcSingleWireCAN
+        case tesla
+        case other
+    }
+
     public init(
         batteryLevel: Int? = nil,
         batteryRangeMiles: Double? = nil,

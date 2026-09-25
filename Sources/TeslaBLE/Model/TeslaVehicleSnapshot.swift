@@ -29,6 +29,9 @@ public struct TeslaVehicleSnapshot: Sendable, Equatable {
     /// Parental controls state. Nil if the vehicle did not report this section.
     public var parentalControls: ParentalControlsState?
 
+    /// GPS position and heading. Nil if the location category was not requested or not reported.
+    public var location: LocationState? = nil
+
     public init(
         charge: ChargeState? = nil,
         climate: ClimateState? = nil,

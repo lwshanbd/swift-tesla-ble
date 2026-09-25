@@ -14,7 +14,7 @@ Pure-Swift package for talking to Tesla vehicles directly over Bluetooth LE. One
 - **End-to-end crypto.** P-256 ECDH session handshake, AES-GCM-128 message encryption, HMAC-SHA-256 authenticated metadata, sliding replay window. Byte-identical with Tesla's Go reference implementation (fixture-verified).
 - **Two signed domains.** VCSEC (body controller: locks, closures, whitelist) and Infotainment (drivetrain, climate, media, charging).
 - **Complete command surface.** Every command exposed by the upstream `pkg/vehicle` Go library is implemented — 75 action commands plus 4 structured-response queries. Grouped by domain in a nested `Command` enum.
-- **State fetching.** Full vehicle snapshot or drive-only fast path via `fetch(_:)` / `fetchDrive()`, returning Swift-native model types that never leak protobuf through public API.
+- **State fetching.** Full vehicle snapshot or drive-only fast path via `fetch(_:)` / `fetchDrive()`, returning Swift-native model types that never leak protobuf through public API. Covers drive (speed, power, active route incl. traffic delay and arrival energy), GPS location and heading, charge, climate (seat heaters and ventilation, defrosters, keeper mode, overheat protection), closures (sentry, display, Speed Limit Mode), tire pressure, media (including playback status and source) and software update. A field the vehicle did not send is `nil`, never a zero value.
 - **Key management.** Pluggable `TeslaKeyStore` protocol with a default `KeychainTeslaKeyStore` implementation (P-256 keys stored per-VIN, device-only, no iCloud sync).
 - **Pairing bootstrap.** First-time `addKey` flows through the unsigned VCSEC whitelist path; the vehicle then waits for an existing owner key to tap the center console.
 

@@ -51,6 +51,77 @@ public struct ClosuresState: Sendable, Equatable {
         case unknown
     }
 
+    /// Detailed sentry mode state; ``sentryModeActive`` is its on/off summary. Nil if the vehicle did not report
+    /// this field.
+    public var sentryMode: SentryMode? = nil
+    /// Whether sentry mode is available on this vehicle. Nil if the vehicle did not report this field.
+    public var sentryModeAvailable: Bool? = nil
+    /// What the center display is showing. Nil if the vehicle did not report this field.
+    public var centerDisplayState: CenterDisplayState? = nil
+    /// Whether keyless driving (remote start) is active. Nil if the vehicle did not report this field.
+    public var remoteStart: Bool? = nil
+    /// Whether leaving valet mode needs a PIN. Nil if the vehicle did not report this field.
+    public var valetPinNeeded: Bool? = nil
+    /// Owner-set Speed Limit Mode. This is not the posted road speed limit. Nil if the vehicle did not report
+    /// this field.
+    public var speedLimitMode: SpeedLimitMode? = nil
+    /// Cybertruck tonneau cover position, 0–100. Nil if the vehicle did not report this field.
+    public var tonneauPercentOpen: Int? = nil
+    /// Whether the tonneau cover is moving. Nil if the vehicle did not report this field.
+    public var tonneauInMotion: Bool? = nil
+
+    /// Sentry mode state.
+    public enum SentryMode: Sendable, Equatable {
+        case off
+        case idle
+        case armed
+        case aware
+        case panic
+        case quiet
+    }
+
+    /// Center display state.
+    public enum CenterDisplayState: Sendable, Equatable {
+        case off
+        case dim
+        case accessory
+        case on
+        case driving
+        case charging
+        case lock
+        case sentry
+        case dog
+        case entertainment
+    }
+
+    /// Owner-set Speed Limit Mode settings.
+    public struct SpeedLimitMode: Sendable, Equatable {
+        /// Whether Speed Limit Mode is on.
+        public var active: Bool?
+        /// Whether a PIN has been set.
+        public var pinCodeSet: Bool?
+        /// The limit the owner chose, in mph.
+        public var currentLimitMph: Double?
+        /// Lowest limit the vehicle allows, in mph.
+        public var minLimitMph: Double?
+        /// Highest limit the vehicle allows, in mph.
+        public var maxLimitMph: Double?
+
+        public init(
+            active: Bool? = nil,
+            pinCodeSet: Bool? = nil,
+            currentLimitMph: Double? = nil,
+            minLimitMph: Double? = nil,
+            maxLimitMph: Double? = nil,
+        ) {
+            self.active = active
+            self.pinCodeSet = pinCodeSet
+            self.currentLimitMph = currentLimitMph
+            self.minLimitMph = minLimitMph
+            self.maxLimitMph = maxLimitMph
+        }
+    }
+
     public init(
         frontDriverDoor: Bool? = nil,
         frontPassengerDoor: Bool? = nil,
